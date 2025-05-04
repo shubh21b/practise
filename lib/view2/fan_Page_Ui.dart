@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:practise/view2/communication.dart';
-//import 'package:practise/widgets/mode_container.dart';
+import 'package:practise/widget/modebox.dart';
+import 'package:practise/widget/sensorbox.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'dart:async';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:developer' as developer;
 
 class FanPage extends StatefulWidget {
   final BluetoothDevice device;
@@ -25,12 +28,19 @@ class _FanPageState extends State<FanPage> with TickerProviderStateMixin {
   double _humidity = 0.0;
   int _rpm = 0;
   bool _motion = false;
-  bool _isDataReceived = false; // Track if data is received
+  bool _isDataReceived = false;
 
   // Timer state
   int _timerMinutes = 0;
   Timer? _timer;
   int _remainingSeconds = 0;
+
+  // Night mode state
+  bool _isNightModeSet = false;
+  TimeOfDay _nightStart = TimeOfDay(hour: 22, minute: 0); // 10:00 PM
+  TimeOfDay _nightEnd = TimeOfDay(hour: 6, minute: 0); // 06:00 AM
+  int _nightTapCount = 0;
+  Timer? _tapTimer;
 
   @override
   void initState() {
@@ -42,7 +52,8 @@ class _FanPageState extends State<FanPage> with TickerProviderStateMixin {
         _temperature = temp;
         _humidity = humidity;
         _rpm = rpm;
-        _motion = motion;
+        // Ignore motion data if in sleep mode
+        _motion = _isNightModeSet ? false : motion;
         _isDataReceived = true;
       });
     };
@@ -66,6 +77,252 @@ class _FanPageState extends State<FanPage> with TickerProviderStateMixin {
     _swingAnimation = Tween<double>(begin: -0.2, end: 0.2).animate(
       CurvedAnimation(parent: _swingController, curve: Curves.easeInOut),
     );
+
+    _loadNightModeSettings();
+  }
+
+  // Load Night Mode settings from SharedPreferences
+  Future<void> _loadNightModeSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _nightStart = TimeOfDay(
+        hour: prefs.getInt('nightStartHour') ?? 22,
+        minute: prefs.getInt('nightStartMinute') ?? 0,
+      );
+      _nightEnd = TimeOfDay(
+        hour: prefs.getInt('nightEndHour') ?? 6,
+        minute: prefs.getInt('nightEndMinute') ?? 0,
+      );
+      _isNightModeSet = prefs.getBool('isNightModeSet') ?? false;
+      // Ensure motion is disabled if sleep mode is active
+      if (_isNightModeSet) {
+        _motion = false;
+      }
+    });
+    developer.log(
+        'Loaded Night Mode settings: Start=${_nightStart.format(context)}, End=${_nightEnd.format(context)}, IsSet=$_isNightModeSet',
+        name: 'NightMode');
+  }
+
+  // Save Night Mode settings to SharedPreferences
+  Future<void> _saveNightModeSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('nightStartHour', _nightStart.hour);
+    await prefs.setInt('nightStartMinute', _nightStart.minute);
+    await prefs.setInt('nightEndHour', _nightEnd.hour);
+    await prefs.setInt('nightEndMinute', _nightEnd.minute);
+    await prefs.setBool('isNightModeSet', _isNightModeSet);
+    developer.log(
+        'Saved Night Mode settings: Start=${_nightStart.format(context)}, End=${_nightEnd.format(context)}, IsSet=$_isNightModeSet',
+        name: 'NightMode');
+  }
+
+  // Show a popup message using ScaffoldMessenger
+  void _showModePopup(String mode) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('$mode mode is on'),
+        duration: Duration(seconds: 3),
+      ),
+    );
+  }
+
+  // Show time picker for night mode start/end times
+  Future<void> _showTimePicker(TimeOfDay initialTime, bool isStart) async {
+    developer.log('Opening time picker for ${isStart ? "Start" : "End"} time',
+        name: 'NightMode');
+    try {
+      final TimeOfDay? picked = await showTimePicker(
+        context: context,
+        initialTime: initialTime,
+        builder: (context, child) {
+          return Theme(
+            data: Theme.of(context).copyWith(
+              timePickerTheme: TimePickerThemeData(
+                backgroundColor: Colors.white,
+                hourMinuteTextColor: Colors.black,
+                dialHandColor: Colors.black,
+                dialTextColor: Colors.black,
+                entryModeIconColor: Colors.black,
+              ),
+              textTheme: TextTheme(
+                bodyLarge: TextStyle(color: Colors.black),
+                bodyMedium: TextStyle(color: Colors.black),
+              ),
+            ),
+            child: child!,
+          );
+        },
+      );
+      if (picked != null) {
+        developer.log('Time picked: ${picked.format(context)}',
+            name: 'NightMode');
+        setState(() {
+          if (isStart)
+            _nightStart = picked;
+          else
+            _nightEnd = picked;
+        });
+      } else {
+        developer.log('No time selected', name: 'NightMode');
+      }
+    } catch (e) {
+      developer.log('Error in time picker: $e', name: 'NightMode');
+    }
+  }
+
+  // Show dialog to set night mode times
+  void _showNightModeDialog() {
+    developer.log('Showing Night Mode dialog', name: 'NightMode');
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: Text('Set Sleep Mode'),
+        backgroundColor: Colors.white,
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Start: ${_nightStart.format(context)}'),
+            ElevatedButton(
+              onPressed: () => _showTimePicker(_nightStart, true),
+              child: Text('Change Start Time'),
+            ),
+            Text('End: ${_nightEnd.format(context)}'),
+            ElevatedButton(
+              onPressed: () => _showTimePicker(_nightEnd, false),
+              child: Text('Change End Time'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              setState(() {
+                _nightStart = TimeOfDay(hour: 22, minute: 0);
+                _nightEnd = TimeOfDay(hour: 6, minute: 0);
+                _isNightModeSet = false;
+                _motion = false; // Ensure motion remains off until new data
+              });
+              _saveNightModeSettings();
+              Navigator.pop(context);
+            },
+            child: Text('Reset'),
+          ),
+          TextButton(
+            onPressed: () {
+              setState(() {
+                _isNightModeSet = true;
+                _fanSpeed = 1.0;
+                _motion = false; // Disable motion detection
+                _rotationController.duration = Duration(
+                  milliseconds: (1000 ~/ _fanSpeed).clamp(100, 1000),
+                );
+                if (!isFanOn) {
+                  isFanOn = true;
+                  _rotationController.repeat();
+                  _swingController.repeat(reverse: true);
+                  _fanComm.setFanState(true);
+                } else {
+                  _rotationController.repeat();
+                }
+                _fanComm.setFanSpeed(_fanSpeed);
+              });
+              _saveNightModeSettings();
+              Navigator.pop(context);
+              _showModePopup('Sleep');
+            },
+            child: Text('OK'),
+          ),
+        ],
+      ),
+    ).catchError((error) {
+      developer.log('Error showing dialog: $error', name: 'NightMode');
+    });
+  }
+
+  // Handle taps on the Sleep button for night mode
+  void _handleSleepModeTap() {
+    developer.log('Sleep button tapped, current count: $_nightTapCount',
+        name: 'NightMode');
+    setState(() {
+      _nightTapCount++;
+      if (_nightTapCount == 1) {
+        if (!_isNightModeSet) {
+          _showNightModeDialog();
+        } else {
+          _fanSpeed = 1.0;
+          _motion = false; // Disable motion detection
+          _rotationController.duration = Duration(
+            milliseconds: (1000 ~/ _fanSpeed).clamp(100, 1000),
+          );
+          if (!isFanOn) {
+            isFanOn = true;
+            _rotationController.repeat();
+            _swingController.repeat(reverse: true);
+            _fanComm.setFanState(true);
+          } else {
+            _rotationController.repeat();
+          }
+          _fanComm.setFanSpeed(_fanSpeed);
+          _showModePopup('Sleep');
+        }
+      } else if (_nightTapCount == 3) {
+        developer.log('Resetting Sleep Mode', name: 'NightMode');
+        _nightStart = TimeOfDay(hour: 22, minute: 0);
+        _nightEnd = TimeOfDay(hour: 6, minute: 0);
+        _isNightModeSet = false;
+        _motion = false; // Reset motion, will update with next sensor data
+        _nightTapCount = 0;
+        _tapTimer?.cancel();
+        _saveNightModeSettings();
+        _showModePopup('Sleep Mode Reset');
+        return;
+      }
+
+      _tapTimer?.cancel();
+      _tapTimer = Timer(Duration(seconds: 2), () {
+        setState(() {
+          developer.log('Tap timer expired, resetting tap count',
+              name: 'NightMode');
+          _nightTapCount = 0;
+        });
+      });
+    });
+  }
+
+  // Function to set fan speed automatically based on temperature
+  void _setAutoFanSpeed() {
+    setState(() {
+      if (_temperature < 30) {
+        _fanSpeed = 1.0;
+      } else if (_temperature < 32) {
+        _fanSpeed = 2.0;
+      } else if (_temperature < 35) {
+        _fanSpeed = 3.0;
+      } else if (_temperature < 37) {
+        _fanSpeed = 4.0;
+      } else {
+        _fanSpeed = 5.0;
+      }
+
+      _rotationController.duration = Duration(
+        milliseconds: (1000 ~/ _fanSpeed).clamp(100, 1000),
+      );
+
+      if (!isFanOn) {
+        isFanOn = true;
+        _rotationController.repeat();
+        _swingController.repeat(reverse: true);
+        _fanComm.setFanState(true);
+      } else {
+        _rotationController.repeat();
+      }
+    });
+
+    _fanComm.setFanSpeed(_fanSpeed);
+    print(
+        "Auto mode set fan speed to: $_fanSpeed for temperature: $_temperature°C");
   }
 
   void _toggleFan() {
@@ -117,50 +374,20 @@ class _FanPageState extends State<FanPage> with TickerProviderStateMixin {
     return "${minutes}m ${seconds}s";
   }
 
-  // Build sensor display box
-  Widget buildSensorBox(
-      BuildContext context, String label, String value, IconData icon) {
-    return Container(
-      padding: EdgeInsets.all(8.0),
-      decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
-        borderRadius: BorderRadius.circular(10),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.grey.withOpacity(0.2),
-            spreadRadius: 2,
-            blurRadius: 5,
-          ),
-        ],
-      ),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(icon, size: 30, color: Theme.of(context).primaryColor),
-          SizedBox(height: 4),
-          Text(label, style: Theme.of(context).textTheme.bodySmall),
-          SizedBox(height: 4),
-          Text(
-            _isDataReceived ? value : "Waiting...",
-            style: Theme.of(context).textTheme.bodyMedium,
-          ),
-        ],
-      ),
-    );
-  }
-
   @override
   void dispose() {
     _rotationController.dispose();
     _swingController.dispose();
     _cancelTimer();
+    _tapTimer?.cancel();
     _fanComm.disconnect();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    print('Building UI with: T:$_temperature, H:$_humidity, R:$_rpm, M:$_motion, DataReceived:$_isDataReceived');
+    print(
+        'Building UI with: T:$_temperature, H:$_humidity, R:$_rpm, M:$_motion, DataReceived:$_isDataReceived');
     return Scaffold(
       appBar: AppBar(
         title: Text("Flutter Fan Animation"),
@@ -176,36 +403,40 @@ class _FanPageState extends State<FanPage> with TickerProviderStateMixin {
               child: Row(
                 children: [
                   Expanded(
-                    child: buildSensorBox(
-                      context,
-                      'Temp',
-                      _isDataReceived
-                          ? '${_temperature.toStringAsFixed(1)}°C'
-                          : 'Waiting...',
-                      Icons.thermostat,
+                    child: SensorBox(
+                      label: 'Temp',
+                      value: '${_temperature.toStringAsFixed(1)}°C',
+                      icon: Icons.thermostat,
+                      isDataReceived: _isDataReceived,
                     ),
                   ),
                   SizedBox(width: 8.0),
                   Expanded(
-                    child: buildSensorBox(
-                      context,
-                      'Humidity',
-                      _isDataReceived
-                          ? '${_humidity.toStringAsFixed(1)}%'
-                          : 'Waiting...',
-                      Icons.water_drop,
+                    child: SensorBox(
+                      label: 'Humidity',
+                      value: '${_humidity.toStringAsFixed(1)}%',
+                      icon: Icons.water_drop,
+                      isDataReceived: _isDataReceived,
                     ),
                   ),
                   SizedBox(width: 8.0),
                   Expanded(
-                    child: buildSensorBox(
-                      context,
-                      'RPM',
-                      _isDataReceived ? '$_rpm' : 'Waiting...',
-                      Icons.speed,
+                    child: SensorBox(
+                      label: 'RPM',
+                      value: '$_rpm',
+                      icon: Icons.speed,
+                      isDataReceived: _isDataReceived,
                     ),
                   ),
                 ],
+              ),
+            ),
+            SizedBox(height: 20),
+            Text(
+              _isDataReceived && _motion ? 'Motion Detected' : 'No Motion',
+              style: TextStyle(
+                fontSize: 16,
+                color: _isDataReceived && _motion ? Colors.red : Colors.grey,
               ),
             ),
             SizedBox(height: 20),
@@ -224,14 +455,6 @@ class _FanPageState extends State<FanPage> with TickerProviderStateMixin {
                   ),
                 );
               },
-            ),
-            SizedBox(height: 20),
-            Text(
-              _isDataReceived && _motion ? 'Motion Detected' : 'No Motion',
-              style: TextStyle(
-                fontSize: 16,
-                color: _isDataReceived && _motion ? Colors.red : Colors.grey,
-              ),
             ),
             SizedBox(height: 20),
             Row(
@@ -284,29 +507,20 @@ class _FanPageState extends State<FanPage> with TickerProviderStateMixin {
                 ModeBoxCon(
                   label: "Auto",
                   icon: Icons.auto_awesome,
-                  onTap: () {},
+                  onTap: _setAutoFanSpeed,
                 ),
                 ModeBoxCon(
                   label: "Sleep",
                   icon: Icons.person_2,
-                  onTap: () {},
+                  onTap: _handleSleepModeTap,
                 ),
               ],
             ),
             SizedBox(height: 20),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  "Timer: ${_formatTimer()}",
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-                ),
-                SizedBox(width: 20),
-                ElevatedButton(
-                  onPressed: () => _startTimer(5),
-                  child: Text("Set 5m Timer"),
-                ),
-              ],
+            Text(
+              'Tap Sleep 3 times to reset sleep mode',
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+              textAlign: TextAlign.center,
             ),
           ],
         ),

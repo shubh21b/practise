@@ -1,6 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:practise/view2/bluetooth_screen.dart';
-import 'package:practise/view2/fanControl.dart';
 import 'package:practise/view2/lunchScreen.dart';
 
 void main() {

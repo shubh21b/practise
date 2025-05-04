@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'dart:async';
-import 'package:practise/view2/fanControl.dart';
+
+import 'package:practise/view2/fan_Page_Ui.dart';
+
 
 class BluetoothScreen extends StatefulWidget {
   const BluetoothScreen({super.key});
